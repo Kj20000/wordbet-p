@@ -1,0 +1,11 @@
+# Example: Download these sample files to test
+# Visit: https://freesound.org/search/?q=letter+a+sound
+# Look for short, clear recordings of letter sounds
+
+# File structure should be:
+# a.mp3 - "ah" sound for A
+# b.mp3 - "buh" sound for B
+# c.mp3 - "kuh" sound for C
+# etc.
+
+# Tip: Search for "phoneme" or "letter sound" on educational sites
