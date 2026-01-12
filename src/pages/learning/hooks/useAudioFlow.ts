@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { playPhonics, stopAudio, speakWord } from "@/lib/audio";
+import { playPhonics, stopAudio } from "@/lib/audio";
 import { hapticTap } from "@/lib/haptics";
 import { Word } from "./useWords";
 
@@ -11,7 +11,6 @@ export const useAudioFlow = (currentWord: Word | null, showBalloons: boolean) =>
   const [suggestion, setSuggestion] = useState("");
   const [highlightedKey, setHighlightedKey] = useState("");
   const [wordCompleted, setWordCompleted] = useState(false);
-  const ttsSpokenRef = useRef(false);
 
   // Resume audio context on first user interaction
   useEffect(() => {
@@ -53,30 +52,11 @@ export const useAudioFlow = (currentWord: Word | null, showBalloons: boolean) =>
     }
   }, []);
 
-  // Reset TTS spoken flag when word changes
-  useEffect(() => {
-    ttsSpokenRef.current = false;
-  }, [currentWord?.id]);
-
   const hardStopAudio = () => {
     stopAudio();
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;
-    }
-  };
-
-  const speakWordTTS = (word: string) => {
-    if (!word) return;
-    if (ttsSpokenRef.current) return;
-    ttsSpokenRef.current = true;
-    console.log("TTS SPEAK", word);
-    try {
-      const firstLetter = word[0]?.toLowerCase() ?? "";
-      speakWord(firstLetter, word);
-    } catch (error) {
-      console.error('TTS error:', error);
-      playPhonics(word).catch(err => console.error('Phonics fallback error:', err));
     }
   };
 
@@ -173,7 +153,6 @@ export const useAudioFlow = (currentWord: Word | null, showBalloons: boolean) =>
       stopAudio();
       
       console.log("WORD COMPLETE", currentWord.word);
-      speakWordTTS(currentWord.word);
       hapticTap(50);
     }
   };

@@ -4,6 +4,7 @@ import { Settings, Image, Type } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Switch } from "@/components/ui/switch";
 import { getCelebrationEnabled } from "@/storage/settings";
+import { speakWord } from "@/lib/audio";
 
 // Custom Hooks
 import { useDeviceLayout } from "./hooks/useDeviceLayout";
@@ -210,6 +211,26 @@ const Learning = () => {
     }, changeDelay);
     
     return () => clearTimeout(imageChangeTimer);
+  }, [wordCompleted, currentWord?.id]);
+
+  // Independent TTS trigger - separate from image change
+  useEffect(() => {
+    if (!wordCompleted || !currentWord) return;
+
+    // Fire TTS independently without blocking image change
+    const speakWordTTS = () => {
+      if (!currentWord.word) return;
+      console.log("TTS SPEAK", currentWord.word);
+      try {
+        const firstLetter = currentWord.word[0]?.toLowerCase() ?? "";
+        speakWord(firstLetter, currentWord.word);
+      } catch (error) {
+        console.error('TTS error:', error);
+      }
+    };
+
+    // Fire TTS asynchronously (non-blocking)
+    speakWordTTS();
   }, [wordCompleted, currentWord?.id]);
 
   const isMobilePortrait = layout === 'mobile-portrait';
