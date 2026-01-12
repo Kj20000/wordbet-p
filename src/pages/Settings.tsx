@@ -652,26 +652,6 @@ export default function Settings() {
       </div>
 
       <div className="container mx-auto p-4 max-w-3xl space-y-6">
-        {/* TEST PHONICS */}
-        <div className="flex gap-2 p-4 bg-muted rounded-lg">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => playPhonics('abcdefghijklmnopqrstuvwxyz')}
-          >
-            🔊 Test All Phonics (A-Z)
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => playPhonics('aeiou')}
-          >
-            🔊 Test Vowels
-          </Button>
-        </div>
-
         {/* ADD WORD */}
         <Card>
           <CardHeader>
@@ -727,45 +707,6 @@ export default function Settings() {
                       className="w-full h-full object-cover"
                     />
                   </div>
-                )}
-              </div>
-
-              {/* AUDIO */}
-              <div className="flex flex-col gap-2">
-                <Label>Voice Recording (Optional)</Label>
-
-                <div className="flex items-center gap-2">
-                  {!isRecording ? (
-                    <Button
-                      type="button"
-                      className="bg-red-600 hover:bg-red-700 text-white w-fit"
-                      onClick={handleStartRecording}
-                    >
-                      <Upload size={16} className="mr-2" />
-                      Record Voice
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      className="bg-gray-600 hover:bg-gray-700 text-white w-fit"
-                      onClick={handleStopRecording}
-                    >
-                      <Upload size={16} className="mr-2" />
-                      Stop Recording
-                    </Button>
-                  )}
-
-                  {audioPreview && (
-                    <audio controls className="h-10">
-                      <source src={audioPreview} type="audio/webm" />
-                    </audio>
-                  )}
-                </div>
-
-                {recordedAudio && (
-                  <p className="text-sm text-green-600">
-                    ✓ Audio recorded ({Math.round(recordedAudio.size / 1024)} KB)
-                  </p>
                 )}
               </div>
 
@@ -1159,53 +1100,6 @@ export default function Settings() {
                   <WordImage image={editingWord.image} />
                 </div>
               ) : null}
-            </div>
-
-            {/* Audio */}
-            <div className="flex flex-col gap-2">
-              <Label>Voice Recording (Optional)</Label>
-
-              <div className="flex items-center gap-2">
-                {!editIsRecording ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-fit"
-                    onClick={handleEditStartRecording}
-                  >
-                    <Upload size={16} className="mr-2" />
-                    Record Voice
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-fit"
-                    onClick={handleEditStopRecording}
-                  >
-                    <Upload size={16} className="mr-2" />
-                    Stop Recording
-                  </Button>
-                )}
-
-                {editAudioPreview && (
-                  <audio controls className="h-10">
-                    <source src={editAudioPreview} type="audio/webm" />
-                  </audio>
-                )}
-              </div>
-
-              {editRecordedAudio && (
-                <p className="text-sm text-green-600">
-                  ✓ New audio recorded ({Math.round(editRecordedAudio.size / 1024)} KB)
-                </p>
-              )}
-
-              {editingWord?.audio && !editRecordedAudio && (
-                <p className="text-sm text-blue-600">
-                  ✓ Existing audio available
-                </p>
-              )}
             </div>
 
             {/* Category Selection */}

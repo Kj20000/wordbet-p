@@ -18,7 +18,8 @@ import { getWords } from "@/storage/words";
 import { getCategories } from "@/storage/categories";
 import { loadImageFile } from "@/storage/files";
 import { getImageDisplayMode, getCelebrationEnabled } from "@/storage/settings";
-import { playAudio, playPhonics, getLastPlayedAudio, stopAudio } from "@/lib/audio";
+import { playAudio, playPhonics, getLastPlayedAudio, stopAudio, speakWord } from "@/lib/audio";
+import { hapticTap } from "@/lib/haptics";
 
 /* =========================
    DEVICE & ORIENTATION DETECTION
@@ -118,6 +119,17 @@ const Learning = () => {
     };
   }, []);
 
+  // Warm up TTS ONCE on mount (prevents first-time freeze)
+  useEffect(() => {
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.getVoices();
+      } catch (error) {
+        console.error('TTS warmup error:', error);
+      }
+    }
+  }, []);
+
   const [allWords, setAllWords] = useState<Word[]>([]);
   const [words, setWords] = useState<Word[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -125,6 +137,7 @@ const Learning = () => {
   const [pendingCategory, setPendingCategory] = useState("all");
 
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentWord, setCurrentWord] = useState<Word | null>(null);
   const [currentInput, setCurrentInput] = useState("");
   const [suggestion, setSuggestion] = useState("");
   const [highlightedKey, setHighlightedKey] = useState("");
@@ -142,15 +155,12 @@ const Learning = () => {
   const [shuffledIndices, setShuffledIndices] = useState<number[]>([]);
   const [shufflePosition, setShufflePosition] = useState(0);
 
-  // Navigation flag for controlled transitions
-  const [pendingNext, setPendingNext] = useState(false);
-  const [navigationLocked, setNavigationLocked] = useState(false);
-
   // For repetitive speech - use ref to avoid stale closure issues
   const repeatIntervalRef = useRef<number | null>(null);
   const celebrationTimerRef = useRef<number | null>(null);
   const categoryDebounceRef = useRef<number | null>(null);
   const categoryChangeTimerRef = useRef<number | null>(null);
+  const ttsSpokenRef = useRef(false);
 
   const hardStopAudio = () => {
     // Stop any playing audio
@@ -163,7 +173,107 @@ const Learning = () => {
     }
   };
 
-  const currentWord = words[currentIndex] || null;
+  // Sync currentWord with words array
+  useEffect(() => {
+    if (words.length === 0) {
+      setCurrentWord(null);
+      return;
+    }
+
+    setCurrentWord(words[currentIndex]);
+  }, [words, currentIndex]);
+
+  // Debug log to verify currentWord updates correctly
+  useEffect(() => {
+    console.log("CURRENT WORD:", currentWord?.word);
+  }, [currentWord]);
+
+  useEffect(() => {
+    ttsSpokenRef.current = false;
+  }, [currentWord?.id]);
+
+  const speakWordTTS = (word: string) => {
+    if (!word) return;
+    if (ttsSpokenRef.current) return;
+    ttsSpokenRef.current = true;
+    console.log("TTS SPEAK", word);
+    try {
+      const firstLetter = word[0]?.toLowerCase() ?? "";
+      speakWord(firstLetter, word);
+    } catch (error) {
+      console.error('TTS error:', error);
+      playPhonics(word).catch(err => console.error('Phonics fallback error:', err));
+    }
+  };
+
+  const changeImage = () => {
+    if (!words.length) return;
+
+    console.log("CHANGE IMAGE called - current index:", currentIndex, "total words:", words.length);
+    
+    setWordCompleted(false);
+    setCurrentInput("");
+
+    setCurrentIndex(i => {
+      const next = (i + 1) % words.length;
+      console.log("New index will be:", next);
+      return next;
+    });
+  };
+
+  const runCelebrationThenChangeImage = () => {
+    console.log("CELEBRATION START", currentWord?.word);
+    if (celebrationTimerRef.current) {
+      clearTimeout(celebrationTimerRef.current);
+      celebrationTimerRef.current = null;
+    }
+
+    // Play celebratory claps
+    playClap();
+    setTimeout(() => playClap(), 200);
+    setTimeout(() => playClap(), 400);
+
+    // Show balloons celebration with 4 balloons
+    setShowBalloons(true);
+    setBalloons([
+      { id: 1, x: 15 + Math.random() * 15, popped: false },
+      { id: 2, x: 35 + Math.random() * 15, popped: false },
+      { id: 3, x: 55 + Math.random() * 15, popped: false },
+      { id: 4, x: 75 + Math.random() * 15, popped: false }
+    ]);
+
+    // Create confetti burst
+    const confettiPieces = Array.from({ length: 30 }, (_, i) => ({
+      id: Date.now() + i,
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+      vx: (Math.random() - 0.5) * 8,
+      vy: (Math.random() - 0.5) * 8 - 3
+    }));
+    setConfetti(confettiPieces);
+
+    // Remove confetti after animation
+    setTimeout(() => {
+      setConfetti([]);
+    }, 4000);
+
+    celebrationTimerRef.current = window.setTimeout(() => {
+      console.log("CELEBRATION TIMER END - Clearing UI");
+      
+      // First, clear the celebration UI
+      setShowBalloons(false);
+      setBalloons([]);
+      setStars([]);
+      
+      // Then, wait for next frame before changing image to ensure UI cleared
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          console.log("Now changing image after celebration cleared");
+          changeImage();
+        });
+      });
+    }, 4000);
+  };
 
   /* SHUFFLE HELPER */
   const createShuffledIndices = (length: number): number[] => {
@@ -196,10 +306,7 @@ const Learning = () => {
     );
   }, []);
 
-  /* FORCE IMAGE RESET ON WORD CHANGE */
-  useEffect(() => {
-    setImageSrc("");
-  }, [currentWord?.id]);
+
 
   useEffect(() => {
     setPendingCategory(selectedCategory);
@@ -218,28 +325,6 @@ const Learning = () => {
     setImageKey(k => k + 1);
   }, [currentWord?.id]);
 
-  /* CONTROLLED NAVIGATION */
-  useEffect(() => {
-    if (!pendingNext || navigationLocked) return;
-
-    setNavigationLocked(true); // 🔒 lock
-
-    // hard reset first
-    setWordCompleted(false);
-    setCurrentInput("");
-
-    // next frame guarantees React commit
-    requestAnimationFrame(() => {
-      setCurrentIndex(i => (i + 1) % words.length);
-      setPendingNext(false);
-    });
-  }, [pendingNext, navigationLocked, words.length]);
-
-  /* UNLOCK NAVIGATION AFTER INDEX CHANGE */
-  useEffect(() => {
-    setNavigationLocked(false);
-  }, [currentIndex]);
-
   /* LOAD IMAGE */
   useEffect(() => {
     if (!currentWord?.image) {
@@ -254,10 +339,17 @@ const Learning = () => {
   /* RESET WORD */
   useEffect(() => {
     if (!currentWord) return;
-
+    
+    // Skip reset during celebration to prevent premature image/word changes
+    if (showBalloons) {
+      console.log("SKIPPING RESET - celebration active for:", currentWord.word);
+      return;
+    }
+    
+    console.log("RESET WORD effect for:", currentWord.word, "showBalloons:", showBalloons);
     setCurrentInput("");
     setWordCompleted(false);
-
+    
     const first = currentWord.word[0];
     setSuggestion(first.toUpperCase());
     setHighlightedKey(first.toLowerCase());
@@ -268,37 +360,33 @@ const Learning = () => {
       idleTimer = null;
     }
 
-    // Play word audio then first letter
-    const playWordAndFirstLetter = async () => {
+    // Speak first letter using phonics (no TTS prompt)
+    const playFirstLetterPhonics = async () => {
       try {
-        // Play the word first
-        if (currentWord.audio) {
-          await playAudio(currentWord.audio);
-          lastPlayedAudio = currentWord.audio;
-        } else {
-          await playPhonics(currentWord.word);
-        }
-        
-        // Small pause
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Then play first letter
+        // Play first letter using phonics only
         await playPhonics(first);
       } catch (error) {
-        console.error('Audio playback error:', error);
-        // Fallback to first letter
-        await playPhonics(first);
+        console.error('Phonics error:', error);
       }
     };
 
-    playWordAndFirstLetter();
+    // Initial: play first letter using phonics
+    playFirstLetterPhonics();
 
-    // Start idle reminder timer (2-3 seconds)
+    // Start idle reminder timer (3 seconds) - repeat phonics if no input
     idleTimer = window.setTimeout(() => {
-      if (lastPlayedAudio) {
-        playAudio(lastPlayedAudio).catch(console.error);
+      if (currentInput === "") {
+        // Kid hasn't typed yet, repeat the first letter phonics
+        playFirstLetterPhonics();
+        
+        // Set up another reminder after 3 more seconds
+        idleTimer = window.setTimeout(() => {
+          if (currentInput === "") {
+            playFirstLetterPhonics();
+          }
+        }, 3000);
       }
-    }, 2500);
+    }, 3000);
 
     // Cleanup on unmount or when dependencies change
     return () => {
@@ -307,7 +395,7 @@ const Learning = () => {
         idleTimer = null;
       }
     };
-  }, [currentWord?.id]);
+  }, [currentWord?.id, showBalloons]);
 
   /* CATEGORY FILTER */
   useEffect(() => {
@@ -319,9 +407,6 @@ const Learning = () => {
       celebrationTimerRef.current = null;
     }
 
-    // kill navigation side-effects
-    setPendingNext(false);
-    setNavigationLocked(false);
     setShowBalloons(false);
     setBalloons([]);
     setStars([]);
@@ -422,18 +507,13 @@ const Learning = () => {
       setSuggestion(next.toUpperCase());
       setHighlightedKey(next.toLowerCase());
       
-      // Play next letter audio
+      // Play next letter audio using phonics (hybrid: phonics for letters)
       const playNextLetter = async () => {
         try {
-          if (currentWord.audio) {
-            await playAudio(currentWord.audio);
-            lastPlayedAudio = currentWord.audio;
-          } else {
-            await playPhonics(next);
-          }
-        } catch (error) {
-          console.error('Audio playback error:', error);
+          // Use phonics for individual letter sounds
           await playPhonics(next);
+        } catch (error) {
+          console.error('Phonics playback error:', error);
         }
       };
 
@@ -443,9 +523,8 @@ const Learning = () => {
         
         // Restart idle timer
         idleTimer = window.setTimeout(() => {
-          if (lastPlayedAudio) {
-            playAudio(lastPlayedAudio).catch(console.error);
-          }
+          // Repeat the last letter sound as a hint
+          playPhonics(next).catch(console.error);
         }, 2500);
       }, 400);
     } else {
@@ -456,84 +535,21 @@ const Learning = () => {
 
       const word = currentWord.word;
 
-      // Stop any playing audio
-      hardStopAudio();
+      // Stop active phonics playback only (keeps TTS audio context intact)
+      stopAudio();
 
-      // Play completion audio
-      setTimeout(() => {
-        hardStopAudio();
-        const playCompletion = async () => {
-          try {
-            if (currentWord.audio) {
-              await playAudio(currentWord.audio);
-              lastPlayedAudio = currentWord.audio;
-            } else {
-              await playPhonics(word);
-            }
-          } catch (error) {
-            console.error('Audio playback error:', error);
-            await playPhonics(word);
-          }
-        };
-        playCompletion();
-      }, 600);
+      console.log("WORD COMPLETE", word);
+      // Speak completion using TTS (fire-and-forget)
+      speakWordTTS(word);
       
       // Haptic feedback
       hapticTap(50);
       
-      // Check if celebration is enabled
-      const celebrationEnabled = getCelebrationEnabled();
-      
-      if (celebrationEnabled) {
-        // Play multiple celebratory claps
-        playClap();
-        setTimeout(() => playClap(), 200);
-        setTimeout(() => playClap(), 400);
-        
-        // Show balloons celebration with 4 balloons
-        setShowBalloons(true);
-        setBalloons([
-          { id: 1, x: 15 + Math.random() * 15, popped: false },
-          { id: 2, x: 35 + Math.random() * 15, popped: false },
-          { id: 3, x: 55 + Math.random() * 15, popped: false },
-          { id: 4, x: 75 + Math.random() * 15, popped: false }
-        ]);
-        
-        // Create confetti burst
-        const confettiPieces = Array.from({ length: 30 }, (_, i) => ({
-          id: Date.now() + i,
-          x: window.innerWidth / 2,
-          y: window.innerHeight / 2,
-          vx: (Math.random() - 0.5) * 8,
-          vy: (Math.random() - 0.5) * 8 - 3
-        }));
-        setConfetti(confettiPieces);
-        
-        // Remove confetti after animation
-        setTimeout(() => {
-          setConfetti([]);
-        }, 2000);
-        
-        // Auto move to next after balloons fly away (5 seconds)
-        celebrationTimerRef.current = window.setTimeout(() => {
-          setShowBalloons(false);
-          setBalloons([]);
-          setStars([]);
-          setPendingNext(prev => {
-            if (navigationLocked) return prev;
-            return true;
-          });
-        }, 5000);
+      // Decide flow based on celebration toggle
+      if (getCelebrationEnabled()) {
+        runCelebrationThenChangeImage();
       } else {
-        // No celebration, just single clap and move to next after a short delay
-        playClap();
-        setTimeout(() => {
-          // Give the "A for apple" TTS time to finish before showing the next image
-          setPendingNext(prev => {
-            if (navigationLocked) return prev;
-            return true;
-          });
-        }, 2500);
+        changeImage();
       }
     }
   };
@@ -566,10 +582,7 @@ const Learning = () => {
     const x = e.clientX - rect.left + rect.width / 2;
     const y = e.clientY - rect.top + rect.height / 2;
     
-    // Mark balloon as popped
-    setBalloons(prev => prev.map(b => 
-      b.id === balloonId ? { ...b, popped: true } : b
-    ));
+    console.log("BALLOON POPPED:", balloonId);
     
     // Create celebration stars
     const newStars = Array.from({ length: 8 }, (_, i) => ({
@@ -584,25 +597,41 @@ const Learning = () => {
       setStars(prev => prev.filter(s => !newStars.find(ns => ns.id === s.id)));
     }, 1000);
     
-    // If all balloons popped, move to next word faster
-    const allPopped = balloons.every(b => b.id === balloonId || b.popped);
-    if (allPopped) {
-      // Clear the celebration timer
-      if (celebrationTimerRef.current) {
-        clearTimeout(celebrationTimerRef.current);
-        celebrationTimerRef.current = null;
-      }
+    // Mark balloon as popped and check if all are popped
+    setBalloons(prev => {
+      const updated = prev.map(b =>
+        b.id === balloonId ? { ...b, popped: true } : b
+      );
+
+      console.log("Updated balloons:", updated);
+      const allPopped = updated.every(b => b.popped);
+      console.log("All popped?", allPopped);
       
-      setTimeout(() => {
-        setShowBalloons(false);
-        setBalloons([]);
-        setStars([]);
-        setPendingNext(prev => {
-          if (navigationLocked) return prev;
-          return true;
-        });
-      }, 800);
-    }
+      if (allPopped) {
+        console.log("ALL BALLOONS POPPED - Starting cleanup");
+        if (celebrationTimerRef.current) {
+          clearTimeout(celebrationTimerRef.current);
+          celebrationTimerRef.current = null;
+        }
+
+        setTimeout(() => {
+          console.log("Starting UI cleanup after 1200ms");
+          // Clear celebration UI first
+          setShowBalloons(false);
+          setStars([]);
+          
+          // Wait for UI to clear before changing image
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              console.log("Balloons cleared - now calling changeImage");
+              changeImage();
+            });
+          });
+        }, 1200);
+      }
+
+      return updated;
+    });
   };
 
   /* =========================
@@ -656,10 +685,28 @@ const Learning = () => {
         <Type className={mode === "word-first" ? "text-primary" : ""} />
       </div>
 
+      {/* NO WORDS MESSAGE */}
+      {(!words.length || !currentWord) && (
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center space-y-4">
+            <div className="text-6xl">📚</div>
+            <h2 className="text-2xl font-bold text-gray-700">No Words Available</h2>
+            <p className="text-gray-500">Add some words in Settings to start learning!</p>
+            <Button
+              onClick={() => navigate("/settings")}
+              className="bg-primary text-white mt-4"
+            >
+              <Settings className="mr-2 h-4 w-4" />
+              Go to Settings
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* ========================================
            LAYOUT 1: MOBILE PORTRAIT
       ======================================== */}
-      {layout === 'mobile-portrait' && (
+      {words.length > 0 && layout === 'mobile-portrait' && (
         <>
           <div className="flex-1 flex flex-col items-center gap-4 px-3 pt-4 pb-[280px]">
             {/* IMAGE */}
@@ -672,14 +719,16 @@ const Learning = () => {
               </button>
 
               <div className="relative w-[80%] max-w-[352px]">
-                {!categoryChanging && currentWord && imageSrc && (mode === "image-first" || wordCompleted) && (
+                {!categoryChanging && currentWord && (
                   <div key={`${currentWord.id}-${currentIndex}`} className="w-full aspect-square rounded-3xl border-4 border-white shadow-2xl drop-shadow-xl overflow-hidden flex items-center justify-center bg-white image-transition">
-                    <img
-                      key={`img-${imageKey}`}
-                      src={imageSrc}
-                      alt={currentWord.word}
-                      className="object-cover w-full h-full image-fade-transition"
-                    />
+                    {imageSrc && (
+                      <img
+                        key={`img-${imageKey}`}
+                        src={imageSrc}
+                        alt={currentWord.word}
+                        className="object-cover w-full h-full image-fade-transition"
+                      />
+                    )}
                   </div>
                 )}
 
@@ -724,7 +773,7 @@ const Learning = () => {
       {/* ========================================
            LAYOUT 2: MOBILE LANDSCAPE
       ======================================== */}
-      {layout === 'mobile-landscape' && (
+      {words.length > 0 && layout === 'mobile-landscape' && (
         <div className="flex-1 flex flex-row h-full">
           {/* LEFT: IMAGE */}
           <div className="relative w-1/2 flex items-center justify-center p-2">
@@ -732,13 +781,17 @@ const Learning = () => {
               <ChevronLeft />
             </button>
 
-            {!categoryChanging && currentWord && imageSrc && (mode === "image-first" || wordCompleted) && (
-              <img
-                key={`img-${imageKey}`}
-                src={imageSrc}
-                alt={currentWord.word}
-                className="object-contain rounded-xl max-h-[calc(100dvh-120px)] max-w-full image-transition"
-              />
+            {!categoryChanging && currentWord && (
+              <div className="rounded-xl overflow-hidden flex items-center justify-center bg-white">
+                {imageSrc && (
+                  <img
+                    key={`img-${imageKey}`}
+                    src={imageSrc}
+                    alt={currentWord.word}
+                    className="object-contain rounded-xl max-h-[calc(100dvh-120px)] max-w-full image-transition"
+                  />
+                )}
+              </div>
             )}
 
             {currentWord && mode === "word-first" && !wordCompleted && (
@@ -780,7 +833,7 @@ const Learning = () => {
       {/* ========================================
            LAYOUT 3: IPAD PORTRAIT
       ======================================== */}
-      {layout === 'ipad-portrait' && (
+      {words.length > 0 && layout === 'ipad-portrait' && (
         <>
           <div className="flex-1 flex flex-col pb-[280px]">
             {/* IMAGE */}
@@ -789,14 +842,16 @@ const Learning = () => {
                 <ChevronLeft className="w-8 h-8 text-white drop-shadow-lg" />
               </button>
 
-              {!categoryChanging && currentWord && imageSrc && (mode === "image-first" || wordCompleted) && (
+              {!categoryChanging && currentWord && (
                 <div key={`${currentWord.id}-${currentIndex}`} className="w-[68%] aspect-square max-w-[400px] rounded-3xl border-4 border-white shadow-2xl drop-shadow-xl overflow-hidden flex items-center justify-center bg-white image-transition">
-                  <img
-                    key={`img-${imageKey}`}
-                    src={imageSrc}
-                    alt={currentWord.word}
-                    className="object-cover w-full h-full rounded-[1.25rem] image-fade-transition"
-                  />
+                  {imageSrc && (
+                    <img
+                      key={`img-${imageKey}`}
+                      src={imageSrc}
+                      alt={currentWord.word}
+                      className="object-cover w-full h-full rounded-[1.25rem] image-fade-transition"
+                    />
+                  )}
                 </div>
               )}
 
@@ -837,7 +892,7 @@ const Learning = () => {
       {/* ========================================
            LAYOUT 4: IPAD LANDSCAPE
       ======================================== */}
-      {layout === 'ipad-landscape' && (
+      {words.length > 0 && layout === 'ipad-landscape' && (
         <>
           <div className="flex-1 flex flex-row pb-[280px]">
             {/* LEFT: IMAGE */}
@@ -846,14 +901,16 @@ const Learning = () => {
                 <ChevronLeft />
               </button>
 
-              {!categoryChanging && currentWord && imageSrc && (mode === "image-first" || wordCompleted) && (
+              {!categoryChanging && currentWord && (
                 <div key={`${currentWord.id}-${currentIndex}`} className="rounded-3xl border-4 border-white shadow-2xl drop-shadow-xl overflow-hidden flex items-center justify-center bg-white w-[480px] h-[300px] image-transition">
-                  <img
-                    key={`img-${imageKey}`}
-                    src={imageSrc}
-                    alt={currentWord.word}
-                    className="object-contain w-full h-full image-fade-transition"
-                  />
+                  {imageSrc && (
+                    <img
+                      key={`img-${imageKey}`}
+                      src={imageSrc}
+                      alt={currentWord.word}
+                      className="object-contain w-full h-full image-fade-transition"
+                    />
+                  )}
                 </div>
               )}
 

@@ -11,18 +11,6 @@ const KEY = "words";
 export function getWords(): Word[] {
   let words = JSON.parse(localStorage.getItem(KEY) || "[]");
   
-  // Add default apple word if no words exist
-  if (words.length === 0) {
-    const defaultApple: Word = {
-      id: "default-apple",
-      word: "apple",
-      image: "/apple.svg",
-      category_id: null
-    };
-    words.push(defaultApple);
-    localStorage.setItem(KEY, JSON.stringify(words));
-  }
-  
   return words;
 }
 

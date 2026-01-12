@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
-import Learning from "./pages/Learning";
+import Learning from "./pages/learning/Learning";
 import Settings from "./pages/Settings";
 
 export default function App() {

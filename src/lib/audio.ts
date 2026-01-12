@@ -4,9 +4,18 @@ import { saveAudioFile, loadAudioFile, deleteAudioFile } from "../storage/files"
    AUDIO MANAGEMENT
 ========================= */
 
-// Single Audio instance for playback (no overlapping sounds)
-let audioInstance: HTMLAudioElement | null = null;
+// Single shared Audio instance for all playback (prevents jank)
+let audioInstance = new Audio();
 let lastPlayedAudio = "";
+
+// Initialize audio instance with error handling
+audioInstance.onerror = () => {
+  console.error('Audio playback error');
+};
+
+audioInstance.onended = () => {
+  // Auto cleanup on end
+};
 
 // Generate filename from word: lowercase, no spaces, no special characters
 export function generateAudioFilename(word: string): string {
@@ -90,25 +99,22 @@ export async function saveWordAudio(word: string, audioFile: File): Promise<stri
   return filename;
 }
 
-// Play audio file (single instance, no overlap)
+// Play audio file (reuse single instance, no overlap)
 export async function playAudio(filename: string): Promise<void> {
   try {
-    // Stop any currently playing audio
-    if (audioInstance) {
-      audioInstance.pause();
-      audioInstance.currentTime = 0;
-    }
-
     const audioUrl = await loadAudioFile(filename);
-    audioInstance = new Audio(audioUrl);
-    
+    audioInstance.pause();
+    audioInstance.currentTime = 0;
+    audioInstance.src = audioUrl;
     lastPlayedAudio = filename;
     
     return new Promise((resolve, reject) => {
-      if (!audioInstance) return reject(new Error('Audio instance not created'));
+      const handleEnded = () => {
+        audioInstance.removeEventListener('ended', handleEnded);
+        resolve();
+      };
       
-      audioInstance.onended = () => resolve();
-      audioInstance.onerror = () => reject(new Error('Audio playback failed'));
+      audioInstance.addEventListener('ended', handleEnded);
       audioInstance.play().catch(reject);
     });
   } catch (error) {
@@ -152,59 +158,49 @@ export async function playPhonics(text: string): Promise<void> {
 
 // Play external phonetic audio files (place in public/audio/phonics/)
 async function playExternalPhonics(letter: string): Promise<void> {
-  // Stop any currently playing audio
-  if (audioInstance) {
+  return new Promise((resolve, reject) => {
     audioInstance.pause();
     audioInstance.currentTime = 0;
-  }
-
-  return new Promise((resolve, reject) => {
-    audioInstance = new Audio(`/audio/phonics/${letter}.mp3`);
+    audioInstance.src = `/audio/phonics/${letter}.mp3`;
     
-    audioInstance.onended = () => {
-      audioInstance = null;
+    const handleEnded = () => {
+      audioInstance.removeEventListener('ended', handleEnded);
       resolve();
     };
-    audioInstance.onerror = (e) => {
-      console.error(`Failed to load phonics for ${letter}:`, e);
-      audioInstance = null;
+    
+    const handleError = () => {
+      audioInstance.removeEventListener('ended', handleEnded);
+      console.error(`Failed to load phonics for ${letter}`);
       reject(new Error('External phonics file not found'));
     };
     
-    audioInstance.play().catch((e) => {
-      console.error(`Failed to play phonics for ${letter}:`, e);
-      audioInstance = null;
-      reject(e);
-    });
+    audioInstance.addEventListener('ended', handleEnded);
+    audioInstance.addEventListener('error', handleError);
+    audioInstance.play().catch(reject);
   });
 }
 
 // Play external phrase audio files (place in public/audio/phonics/)
 async function playExternalPhonicsPhrase(filename: string): Promise<void> {
-  // Stop any currently playing audio
-  if (audioInstance) {
+  return new Promise((resolve, reject) => {
     audioInstance.pause();
     audioInstance.currentTime = 0;
-  }
-
-  return new Promise((resolve, reject) => {
-    audioInstance = new Audio(`/audio/phonics/${filename}`);
+    audioInstance.src = `/audio/phonics/${filename}`;
     
-    audioInstance.onended = () => {
-      audioInstance = null;
+    const handleEnded = () => {
+      audioInstance.removeEventListener('ended', handleEnded);
       resolve();
     };
-    audioInstance.onerror = (e) => {
-      console.error(`Failed to load phrase ${filename}:`, e);
-      audioInstance = null;
+    
+    const handleError = () => {
+      audioInstance.removeEventListener('ended', handleEnded);
+      console.error(`Failed to load phrase ${filename}`);
       reject(new Error('External phrase file not found'));
     };
     
-    audioInstance.play().catch((e) => {
-      console.error(`Failed to play phrase ${filename}:`, e);
-      audioInstance = null;
-      reject(e);
-    });
+    audioInstance.addEventListener('ended', handleEnded);
+    audioInstance.addEventListener('error', handleError);
+    audioInstance.play().catch(reject);
   });
 }
 
@@ -247,14 +243,78 @@ function playLetterSound(audioContext: AudioContext, letter: string): Promise<vo
 
 // Stop any currently playing audio
 export function stopAudio(): void {
-  if (audioInstance) {
-    audioInstance.pause();
-    audioInstance.currentTime = 0;
-    audioInstance = null;
-  }
+  audioInstance.pause();
+  audioInstance.currentTime = 0;
 }
 
 // Delete audio file
 export async function deleteWordAudio(filename: string): Promise<void> {
   await deleteAudioFile(filename);
+}
+
+/* =========================
+   TEXT-TO-SPEECH (TTS) FOR WORD DEFINITIONS (Fire-and-Forget, Non-blocking)
+========================= */
+
+// TTS freeze safety kill switch
+let ttsEnabled = true;
+
+// Optimized TTS that doesn't block UI and doesn't require await
+export function speakWord(word: string, definition?: string): void {
+  // If TTS is disabled (due to previous errors), skip silently
+  if (!ttsEnabled) return;
+
+  // Check if browser supports Web Speech API
+  if (!("speechSynthesis" in window)) {
+    console.warn('Web Speech API not supported');
+    ttsEnabled = false; // Disable if not supported
+    return;
+  }
+
+  try {
+    // Critical: Cancel any ongoing speech
+    speechSynthesis.cancel();
+    
+    // Create the speech text
+    // Format: "a for apple" or just the word if no definition
+    const speechText = definition 
+      ? `${word} for ${definition}`
+      : word;
+    
+    const utterance = new SpeechSynthesisUtterance(speechText);
+    
+    // Configure utterance for kids
+    utterance.rate = 0.9; // Slightly slower for clarity
+    utterance.pitch = 1.2; // Slightly higher pitch for child-friendly voice
+    utterance.volume = 1.0; // Full volume
+    
+    // Use a child-friendly voice if available
+    const voices = speechSynthesis.getVoices();
+    const childVoice = voices.find(v => 
+      v.name.toLowerCase().includes('child') || 
+      v.name.toLowerCase().includes('kid') ||
+      v.name.toLowerCase().includes('google us english')
+    ) || voices[0];
+    
+    if (childVoice) {
+      utterance.voice = childVoice;
+    }
+    
+    // Fire-and-forget: No await, no onend dependency
+    speechSynthesis.speak(utterance);
+  } catch (error) {
+    console.error('TTS error:', error);
+    // Permanently disable TTS if it fails
+    ttsEnabled = false;
+  }
+}
+
+// Speak just the word (without definition)
+export function speakWordOnly(word: string): void {
+  speakWord(word, undefined);
+}
+
+// Get TTS enabled status (for debugging)
+export function isTTSEnabled(): boolean {
+  return ttsEnabled;
 }
